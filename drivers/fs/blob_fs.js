@@ -22,6 +22,10 @@ var gc_hash = {}; //for caching gc info;
 var enum_cache = {};
 var enum_expire = {};
 
+// by jesse
+// Recoord file of SME space size 
+var sme_qutoa_file = "sme_quota";
+
 function hex_val(ch)
 {
   if (48 <= ch && ch <= 57) { return ch - 48; }
@@ -484,12 +488,45 @@ function create_prefix_folders(prefix_array, callback)
   return true;
 }
 
+// by jesse
+function get_quota_for_sme(container_name,fb) {
+	var obj = JSON.parse(fs.readFileSync(fb.root_path+"/"+container_name+"/~enum/"+sme_qutoa_file));  
+	return parseInt(obj.quota,10);
+}
+
+// by jesse
+function get_used_size_for_sme(container_name,fb) {
+	var obj = JSON.parse(fs.readFileSync(fb.root_path+"/"+container_name+"/~enum/"+"quota"));  
+	return parseInt(obj.storage,10);
+}
+
+// by jesse
+// Check SME Space whether over quota
+function check_container_quota(container_name,fb) {
+	
+	var sme_quota = get_quota_for_sme(container_name,fb);
+	var used_size = get_used_size_for_sme(container_name,fb);
+	
+	if ( used_size > sme_quota ) {
+		return false;
+	} else {
+		return true;
+	}
+}
+
 FS_blob.prototype.file_create = function (container_name,filename,create_options, create_meta_data, data,callback,fb)
 {
   var resp = {};
 //step 1 check container existence
   var c_path = this.root_path + "/" + container_name;
   if (container_exists(container_name,callback,fb) === false) return;
+
+  // by jesse , add sme quota limmit
+  if ( check_container_quota(container_name,fb) === false )  {
+	error_msg(500,"UsageExceeded","Usage will exceed the SME quota",resp);
+    callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+    return;
+  }
   //QUOTA
   if (this.quota && this.used_quota + parseInt(create_meta_data["content-length"],10) > this.quota || this.obj_limit && this.obj_count >= this.obj_limit) {
     error_msg(500,"UsageExceeded","Usage will exceed the quota",resp);
@@ -1106,6 +1143,11 @@ function query_files(container_name, options, callback, fb)
   res_json["Prefix"] = options.prefix ? options.prefix : {};
   res_json["Marker"] = options.marker ? options.marker : {};
   res_json["MaxKeys"] = ""+limit;
+  
+  // by jesse , show SME info ( Quota Size and Used Size )
+  res_json["SME_QuotaSize"] = get_quota_for_sme(container_name,fb);
+  res_json["SME_UsedSize"] = get_used_size_for_sme(container_name,fb);
+  
   if (options.delimiter) {
     res_json["Delimiter"] = options.delimiter;
   }
@@ -1264,6 +1306,14 @@ FS_Driver.prototype.file_copy = function(container_name, file_key, source_contai
 FS_Driver.prototype.container_create = function(container_name,options,data_stream,callback) {
   if (check_client(this.client,callback) === false) return;
   this.client.container_create(container_name,callback,this.client);
+  // by jesse 
+  // add SME quota function , unit is MB , default = 5G
+  if ( data_stream.query.quota == null) {
+	fs.writeFileSync(this.root_path + "/" + container_name+"/"+ENUM_FOLDER+"/"+sme_qutoa_file, "{\"quota\":5368709120}");
+  } else {
+	fs.writeFileSync(this.root_path + "/" + container_name+"/"+ENUM_FOLDER+"/"+sme_qutoa_file, "{\"quota\":"
+																			+data_stream.query.quota+"}");
+  }
 };
 
 FS_Driver.prototype.file_delete = function(container_name,file_key,callback) {
