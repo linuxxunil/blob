@@ -295,13 +295,19 @@ function FS_blob(option,callback)  //fow now no encryption for fs
         } );
   });
 }
-
-FS_blob.prototype.container_create = function(container_name,callback,fb)
+//by jesse
+//FS_blob.prototype.container_create = function(container_name,callback,fb)
+FS_blob.prototype.container_create = function(compose,callback,fb)
 {
+	// by jesse , get container name and container size
+  var container_name = compose.split("\n")[0];
+  var container_size = compose.split("\n")[1];
   var resp_code, resp_header, resp_body;
   resp_code = resp_header = resp_body = null;
   fs.stat(fb.root_path+"/"+container_name+"/ts", function(err,stats) {
     if (stats) {fb.logger.debug("container_name "+container_name+" exists!");
+	//by jesse , modify SME quota size
+	  fs.writeFileSync(fb.root_path + "/" + container_name+"/"+ENUM_FOLDER+"/"+sme_qutoa_file, "{\"quota\":"+container_size+"}");
       resp_code = 200;
       var header = common_header();
       header.Location = '/' + container_name;
@@ -332,6 +338,9 @@ FS_blob.prototype.container_create = function(container_name,callback,fb)
         fs.mkdirSync(c_path+"/"+ENUM_FOLDER,"0775");
       }
       fs.writeFileSync(c_path+"/"+ENUM_FOLDER+"/base", "{}");
+	  //by jesse , add SME quota size at init
+	  fs.writeFileSync(c_path+"/"+ENUM_FOLDER+"/quota","{\"storage\":0,\"count\":0}");
+	  fs.writeFileSync(c_path+"/"+ENUM_FOLDER+"/"+sme_qutoa_file, "{\"quota\":"+container_size+"}");
       if (Path.existsSync(c_path+"/ts") === false) //double check ts
       {
         fb.logger.debug( ("timestamp "+c_path+"/ts does not exist. Need to create one"));
@@ -1305,15 +1314,19 @@ FS_Driver.prototype.file_copy = function(container_name, file_key, source_contai
 
 FS_Driver.prototype.container_create = function(container_name,options,data_stream,callback) {
   if (check_client(this.client,callback) === false) return;
-  this.client.container_create(container_name,callback,this.client);
+ 
+  //this.client.container_create(container_name,callback,this.client);
+
   // by jesse 
   // add SME quota function , unit is MB , default = 5G
+	var compose;
   if ( data_stream.query.quota == null) {
-	fs.writeFileSync(this.root_path + "/" + container_name+"/"+ENUM_FOLDER+"/"+sme_qutoa_file, "{\"quota\":5368709120}");
+		compose = container_name + "\n" + 5368709120;
   } else {
-	fs.writeFileSync(this.root_path + "/" + container_name+"/"+ENUM_FOLDER+"/"+sme_qutoa_file, "{\"quota\":"
-																			+data_stream.query.quota+"}");
+		compose = container_name + "\n" + data_stream.query.quota;
   }
+	this.client.container_create(compose,callback,this.client);
+ 
 };
 
 FS_Driver.prototype.file_delete = function(container_name,file_key,callback) {
