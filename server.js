@@ -10,8 +10,8 @@ var fs = require('fs');
 var events = require('events');
 
 // by Jesse , add syslog
-var Syslog = require('./node_modules/node-syslog/node-syslog');
-Syslog.init("CDM-CSM", Syslog.LOG_ODELAY, Syslog.LOG_LOCAL0);
+var SyslogClient = require('./node_modules/ain2');
+var Syslog = new SyslogClient({tag: 'CDM-CSM', facility: 'local0', hostname: '127.0.0.1', port: 514});
 
 var drivers = { }; //storing backend driver objects
 var driver_order = { }; //give sequential numbering for drivers

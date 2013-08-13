@@ -1,3 +1,4 @@
 2013-05-08 add sme quota function
 2013-05-10 Fix , 當建立SME時，會因某些當案未存在，而讀取失敗
 2013-05-22 add syslog
+2013-05-22 change node-syslog to ain2 , support syslog client
