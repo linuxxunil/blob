@@ -8,6 +8,11 @@ var j2x = require('./common/json2xml'); //json to xml transformation
 var util = require('util');
 var fs = require('fs');
 var events = require('events');
+
+// by Jesse , add syslog
+var Syslog = require('./node_modules/node-syslog/node-syslog');
+Syslog.init("CDM-CSM", Syslog.LOG_ODELAY, Syslog.LOG_LOCAL0);
+
 var drivers = { }; //storing backend driver objects
 var driver_order = { }; //give sequential numbering for drivers
 var current_driver = null; //current driver in use
@@ -116,9 +121,50 @@ var normalize_resp_headers = function (headers,method, code, body, stream) {
   if (!headers["x-amz-request-id"]) headers["x-amz-request-id"] = "1D2E3A4D5B6E7E8F9"; //No actual request id for now
   if (!headers["x-amz-id-2"]) headers["x-amz-id-2"] = "3F+E1E4B1D5A9E2DB6E5E3F5D8E9"; //no actual request id 2
 }
-
+/*
 var general_resp = function (res,post_proc,verb) {//post_proc is for post-processing response body
   return function (resp_code, resp_header, resp_body, resp_data) {
+    if (res.client_closed || res.already_sent) { return; }
+    res.already_sent = true;
+    var headers = resp_header;
+    var xml_body = "";
+    if (resp_body) {
+      if (resp_code < 300 && post_proc) resp_body = post_proc(resp_body); //make sure not to process error response
+      xml_body = j2x.json2xml(resp_body,0,resp_code >= 300?undefined:XMLNS);
+      if (headers["content-type"]) delete headers["content-type"];
+      headers["Content-Type"] = "application/xml";
+    }
+    normalize_resp_headers(headers, verb, resp_code, resp_body !== null, resp_data !== null);
+    res.writeHeader(resp_code,headers);
+    if (resp_body && verb !== 'head') {
+      res.write(xml_body);
+    }
+    if (resp_data && verb !== 'head') {
+      //need to stream out
+      resp_data.pipe(res);
+    } else res.end();
+  };
+};
+*/
+
+// by jesse , add Syslog
+function syslog(req,msg) {
+	if ( msg != null ) {
+		var log_msg = "{\"SrcIP\": \""	+ req.socket.remoteAddress + "\","
+					+  "\"DstIP\": \""	+ req.host() + "\","
+					+  "\"SmeID\": \""	+ req.params.container + "\","
+					+  msg				+ "}";
+		Syslog.log(Syslog.LOG_INFO, log_msg);
+	} else {
+		// nothing
+	}
+}
+
+var general_resp = function (req,res,post_proc,verb) {//post_proc is for post-processing response body
+  return function (resp_code, resp_header, resp_body, resp_data , log_msg) {
+	// by jesse , add syslog
+	syslog(req,log_msg);
+	
     if (res.client_closed || res.already_sent) { return; }
     res.already_sent = true;
     var headers = resp_header;
@@ -151,13 +197,13 @@ var authenticate = function(req,res,next) {
     //only do authentication if enabled
     var resp = {};
     if (auth_module.authenticate(credential_hash, req.method.toUpperCase(), targets, req.headers, Authorization, resp) === false) {
-      general_resp(res, null, req.method.toLowerCase())(resp.resp_code, resp.resp_header, resp.resp_body, null);
+      general_resp(req,res, null, req.method.toLowerCase())(resp.resp_code, resp.resp_header, resp.resp_body, null);
       return;
     }
   }
   if (targets.container && !valid_name(targets.container)) {
     logger.error(('Invalid container name: ' + targets.container));
-      general_resp(res,null,req.method.toLowerCase())(400,{},{Error:{Code:"InvalidBucketName",Message:"The specified bucket is not valid"}}, null);
+      general_resp(req,res,null,req.method.toLowerCase())(400,{},{Error:{Code:"InvalidBucketName",Message:"The specified bucket is not valid"}}, null);
     return;
   }
   next();
@@ -200,7 +246,7 @@ if (!config.account_file) config.account_file = './account.json'; //set default 
     var basic_auth = function(req,res,next) {
       if (req.headers.authorization !== encoded_creds) {
         logger.error("req.auth: "+req.headers.authorization+" encoded_creds: "+encoded_creds);
-        general_resp(res,null,req.method.toLowerCase())(401,{},{Error:{Code:"Unauthorized",Message:"Credentials do not match"}}, null);
+        general_resp(req,res,null,req.method.toLowerCase())(401,{},{Error:{Code:"Unauthorized",Message:"Credentials do not match"}}, null);
         return;
       }
       next();
@@ -211,7 +257,7 @@ if (!config.account_file) config.account_file = './account.json'; //set default 
       req.on('data', function(chunk) { obj_str += chunk.toString();
         if (obj_str.length > 512) {
            req.destroy();
-           general_resp(res,null,req.method.toLowerCase())(400,{},{Error:{Code:"MaxMessageLengthExceeded",Message:"Your request was too big."}}, null);
+           general_resp(req,res,null,req.method.toLowerCase())(400,{},{Error:{Code:"MaxMessageLengthExceeded",Message:"Your request was too big."}}, null);
         }
       } );
       req.on('end', function() {
@@ -219,7 +265,7 @@ if (!config.account_file) config.account_file = './account.json'; //set default 
         try {
           obj = JSON.parse(obj_str); obj_str = null;
         } catch (err) {
-          general_resp(res)(400,{},{Error:{Code:"BadJSONFormat",Message:"The request has bad JSON format"}},null);
+          general_resp(req,res)(400,{},{Error:{Code:"BadJSONFormat",Message:"The request has bad JSON format"}},null);
           return;
         }
         //since it's single threaded, at this moment there won't be any concurrent (un)binding
@@ -233,12 +279,12 @@ if (!config.account_file) config.account_file = './account.json'; //set default 
         var key = Object.keys(obj)[0];
         if (key === config.keyID || acc_obj[key]) {
           //reject this request
-          general_resp(res,null,req.method.toLowerCase())(409,{},{Error:{Code:"KeyExists",Message:"The key you want to add already exists"}}, null);
+          general_resp(req,res,null,req.method.toLowerCase())(409,{},{Error:{Code:"KeyExists",Message:"The key you want to add already exists"}}, null);
         } else {
           //add to account file and ack
           acc_obj[key] = obj[key];
           fs.writeFileSync(config.account_file, JSON.stringify(acc_obj));
-          general_resp(res,null,req.method.toLowerCase())(200,{},null, null);
+          general_resp(req,res,null,req.method.toLowerCase())(200,{},null, null);
         }
       });
     });
@@ -253,7 +299,7 @@ if (!config.account_file) config.account_file = './account.json'; //set default 
       var st = fs.createReadStream(tmp_fn);
       st.on('open', function(fd) {
         fs.unlinkSync(tmp_fn); //fs trick
-        general_resp(res,null,req.method.toLowerCase())(200,{},null, st);
+        general_resp(req,res,null,req.method.toLowerCase())(200,{},null, st);
       });
     });
     app.put('/~unbind[/]{0,1}$', basic_auth);
@@ -262,7 +308,7 @@ if (!config.account_file) config.account_file = './account.json'; //set default 
       req.on('data', function(chunk) { obj_str += chunk.toString();
         if (obj_str.length > 512) {
            req.destroy();
-           general_resp(res,null,req.method.toLowerCase())(400,{},{Error:{Code:"MaxMessageLengthExceeded",Message:"Your request was too big."}}, null);
+           general_resp(req,res,null,req.method.toLowerCase())(400,{},{Error:{Code:"MaxMessageLengthExceeded",Message:"Your request was too big."}}, null);
         }
       } );
       req.on('end', function() {
@@ -270,7 +316,7 @@ if (!config.account_file) config.account_file = './account.json'; //set default 
         try {
           obj = JSON.parse(obj_str); obj_str = null;
         } catch (err) {
-          general_resp(res)(400,{},{Error:{Code:"BadJSONFormat",Message:"The request has bad JSON format"}},null);
+          general_resp(req,res)(400,{},{Error:{Code:"BadJSONFormat",Message:"The request has bad JSON format"}},null);
           return;
         }
         //since it's single threaded, at this moment there won't be any concurrent (un)binding
@@ -284,12 +330,12 @@ if (!config.account_file) config.account_file = './account.json'; //set default 
         var key = Object.keys(obj)[0];
         if (key === config.keyID || !acc_obj[key]) {
           //reject this request
-          general_resp(res,null,req.method.toLowerCase())(404,{},{Error:{Code:"NoSuchKey",Message:"The key you want to delete does not exist"}}, null);
+          general_resp(req,res,null,req.method.toLowerCase())(404,{},{Error:{Code:"NoSuchKey",Message:"The key you want to delete does not exist"}}, null);
         } else {
           //add to account file and ack
           delete acc_obj[key];
           fs.writeFileSync(config.account_file, JSON.stringify(acc_obj));
-          general_resp(res,null,req.method.toLowerCase())(200,{},null, null);
+          general_resp(req,res,null,req.method.toLowerCase())(200,{},null, null);
         }
       });
     });
@@ -342,12 +388,11 @@ app.get('/~config[/]{0,1}$',function(req,res) {
 app.get('/',authenticate);
 app.get('/',function(req,res) {
   if (req.method === 'HEAD') { //not allowed
-    general_resp(res,null,'head')(405,{'Allow':'GET'},null, null);
+    general_resp(req,res,null,'head')(405,{'Allow':'GET'},null, null);
     return;
   }
-  current_driver.container_list(general_resp(res,container_list_post_proc));
+  current_driver.container_list(general_resp(req,res,container_list_post_proc));
 });
-
 
 app.get('/:container[/]{0,1}$', authenticate);
 app.get('/:container[/]{0,1}$',function(req,res) {
@@ -356,11 +401,12 @@ app.get('/:container[/]{0,1}$',function(req,res) {
     res.client_closed = true;
   });
   var opt = {};
+
   if (req.query.marker) { opt.marker = req.query.marker; }
   if (req.query.prefix) { opt.prefix = req.query.prefix; }
   if (req.query.delimiter) { opt.delimiter = req.query.delimiter; }
   if (req.query["max-keys"]) { opt["max-keys"] = req.query["max-keys"]; }
-  current_driver.file_list(req.params.container,opt,general_resp(res,file_list_post_proc,req.method.toLowerCase()));
+  current_driver.file_list(req.params.container,opt,general_resp(req,res,file_list_post_proc,req.method.toLowerCase()));
 });
 
 var get_hdrs = [ 'if-modified-since','if-unmodified-since', 'if-match', 'if-none-match'];
@@ -379,13 +425,13 @@ app.get('/:container/*',function(req,res) {
     if (req.headers[get_hdrs[idx]]) options[get_hdrs[idx]] = req.headers[get_hdrs[idx]];
   if (req.headers.range) options.range = req.headers.range;
   options.method = req.method.toLowerCase();
-  current_driver.file_read(req.params.container, req.params[0], options,general_resp(res,null,options.method));
+  current_driver.file_read(req.params.container, req.params[0], options,general_resp(req,res,null,options.method));
 });
 
 app.put('/:container[/]{0,1}$', authenticate);
 app.put('/:container[/]{0,1}$',function(req,res) {
   //always empty option for now
-  current_driver.container_create(req.params.container,{},req,general_resp(res));
+  current_driver.container_create(req.params.container,{},req,general_resp(req,res));
 });
 
 var put_hdrs = [ 'cache-control', 'content-disposition', 'content-encoding', 'content-length',
@@ -396,6 +442,7 @@ var copy_hdrs = [ 'x-amz-copy-source-if-match', 'x-amz-copy-source-if-none-match
 'x-amz-metadata-directive', 'x-amz-storage-class'];
 app.put('/:container/*', authenticate);
 app.put('/:container/*', function(req,res) {
+
   var metadata = {}, options = {}, idx;
   for (idx = 0; idx < put_hdrs.length; idx++)
     if (req.headers[put_hdrs[idx]]) metadata[put_hdrs[idx]] = req.headers[put_hdrs[idx]];
@@ -410,22 +457,23 @@ app.put('/:container/*', function(req,res) {
     var src_obj = src.substr(src.indexOf('/',1)+1);
     for (idx = 0; idx < copy_hdrs.length; idx++)
       if (req.headers[copy_hdrs[idx]]) options[copy_hdrs[idx]] = req.headers[copy_hdrs[idx]];
-    current_driver.file_copy(req.params.container, req.params[0], src_buck, src_obj, options, metadata, general_resp(res));
+    current_driver.file_copy(req.params.container, req.params[0], src_buck, src_obj, options, metadata, general_resp(req,res));
   } else {
     for (idx = 0; idx < put_opts.length; idx++)
       if (req.headers[put_opts[idx]]) options[put_opts[idx]] = req.headers[put_opts[idx]];
-    current_driver.file_create(req.params.container,req.params[0],options,metadata,req,general_resp(res));
+    current_driver.file_create(req.params.container,req.params[0],options,metadata,req,general_resp(req,res));
   }
+
 });
 
 app.delete('/:container[/]{0,1}$', authenticate);
 app.delete('/:container[/]{0,1}$',function(req,res) {
-  current_driver.container_delete(req.params.container,general_resp(res));
+  current_driver.container_delete(req.params.container,general_resp(req,res));
 });
 
 app.delete('/:container/*',authenticate);
 app.delete('/:container/*',function(req,res) {
-  current_driver.file_delete(req.params.container,req.params[0],general_resp(res));
+  current_driver.file_delete(req.params.container,req.params[0],general_resp(req,res));
 });
 
 exports.vblob_gateway = app;

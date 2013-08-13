@@ -22,10 +22,8 @@ var gc_hash = {}; //for caching gc info;
 var enum_cache = {};
 var enum_expire = {};
 
-// by jesse
-// Recoord file of SME space size 
+// by jesse , Recoord file of SME space size 
 var sme_qutoa_file = "sme_quota";
-
 function hex_val(ch)
 {
   if (48 <= ch && ch <= 57) { return ch - 48; }
@@ -249,6 +247,8 @@ function start_quota_gathering(fb)
   });
 }
 
+
+//Constructor
 function FS_blob(option,callback)  //fow now no encryption for fs
 {
   var this1 = this;
@@ -303,16 +303,21 @@ FS_blob.prototype.container_create = function(compose,callback,fb)
   var container_name = compose.split("\n")[0];
   var container_size = compose.split("\n")[1];
   var resp_code, resp_header, resp_body;
+
   resp_code = resp_header = resp_body = null;
   fs.stat(fb.root_path+"/"+container_name+"/ts", function(err,stats) {
-    if (stats) {fb.logger.debug("container_name "+container_name+" exists!");
+    if (stats) {
+	  fb.logger.debug("container_name "+container_name+" exists!");
 	//by jesse , modify SME quota size
 	  fs.writeFileSync(fb.root_path + "/" + container_name+"/"+ENUM_FOLDER+"/"+sme_qutoa_file, "{\"quota\":"+container_size+"}");
       resp_code = 200;
       var header = common_header();
       header.Location = '/' + container_name;
       resp_header = header;
-      callback(resp_code, resp_header, null, null);
+	  
+	  // by jesse , add syslog
+	  var log_msg = "\"Code\": \"101\",\"Message\": \"SME exists!\"";
+      callback(resp_code, resp_header, null, null, log_msg); 
       return;
     }
     var c_path = fb.root_path + "/" + container_name;
@@ -338,6 +343,7 @@ FS_blob.prototype.container_create = function(compose,callback,fb)
         fs.mkdirSync(c_path+"/"+ENUM_FOLDER,"0775");
       }
       fs.writeFileSync(c_path+"/"+ENUM_FOLDER+"/base", "{}");
+	  
 	  //by jesse , add SME quota size at init
 	  fs.writeFileSync(c_path+"/"+ENUM_FOLDER+"/quota","{\"storage\":0,\"count\":0}");
 	  fs.writeFileSync(c_path+"/"+ENUM_FOLDER+"/"+sme_qutoa_file, "{\"quota\":"+container_size+"}");
@@ -345,21 +351,27 @@ FS_blob.prototype.container_create = function(compose,callback,fb)
       {
         fb.logger.debug( ("timestamp "+c_path+"/ts does not exist. Need to create one"));
         fs.writeFileSync(c_path+"/ts", "DEADBEEF");
-      } else
+      } 
+	  else
       {
         fb.logger.debug( ("timestamp "+c_path+"/ts exists!"));
       }
     } catch (err1) {
       var resp = {};
       error_msg(500,"InternalError","Cannot create bucket because: "+err1,resp);
-      callback(resp.resp_code, resp.resp_header, resp.resp_body,null);
+	  // by jesse , add syslog
+	  var log_msg = "\"Code\": \"102\",\"Message\": \"SME create failure\"";
+      callback(resp.resp_code, resp.resp_header, resp.resp_body,null,log_msg);
       return;
     }
     resp_code = 200;
     var header = common_header();
     header.Location = '/'+container_name;
     resp_header = header;
-    callback(resp_code, resp_header, null, null);
+	
+	// by jesse , add syslog
+	var log_msg = "\"Code\": \"0\",\"Message\": \"SME create success\"";
+    callback(resp_code, resp_header, null, null, log_msg);
   });
 };
 
@@ -377,7 +389,8 @@ FS_blob.prototype.container_delete = function(container_name,callback,fb)
       function (error, stdout, stderr) {
         var header = common_header();
         resp_code = 204; resp_header = header;
-        callback(resp_code, resp_header, null, null);
+		var log_msg = "\"Code\": \"0\",\"Message\": \"SME delete success!\"";
+        callback(resp_code, resp_header, null, null,log_msg);
       }
     );
     return;
@@ -394,14 +407,16 @@ FS_blob.prototype.container_delete = function(container_name,callback,fb)
               function (error, stdout, stderr) {
                 var header = common_header();
                 resp_code = 204; resp_header = header;
-                callback(resp_code, resp_header, null, null);
+				var log_msg = "\"Code\": \"0\",\"Message\": \"SME delete success!\"";
+                callback(resp_code, resp_header, null, null, log_msg);
               }
             );
           } else {
             var resp = {};
             error_msg(409,"BucketNotEmpty","The bucket you tried to delete is not empty.",resp);
             resp_code = resp.resp_code; resp_header = resp.resp_header; resp_body = resp.resp_body;
-            callback(resp_code, resp_header, resp_body, null);
+			var log_msg = "\"Code\": \"201\",\"Message\": \"SME delete failure (space is not empty!)\"";
+            callback(resp_code, resp_header, resp_body, null, log_msg);
           }
           var retry_cnt=0;
           while (retry_cnt < MAX_DEL_RETRY) { try { fs.unlinkSync(fn1); } catch (e) {} ; retry_cnt++; }
@@ -426,7 +441,10 @@ function container_exists(container_name, callback,fb)
     var resp = {};
     error_msg(404,"NoSuchBucket","No such bucket on disk",resp);
     resp_code = resp.resp_code; resp_header = resp.resp_header; resp_body = resp.resp_body;
-    callback(resp_code, resp_header, resp_body, null);
+	
+	// by jesse , add syslog
+	var log_msg = "\"Code\": \"103\",\"Message\": \"SME don't exists!\"";
+    callback(resp_code, resp_header, resp_body, null, log_msg);
     return false;
   }
   return true;
@@ -486,7 +504,9 @@ function create_prefix_folders(prefix_array, callback)
         fs.mkdirSync(path_pref,"0775");
       } catch(err) {
         if (err.code !== 'EEXIST') {
-          callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+		  // by jesse , add syslog
+		  var log_msg = "\"Code\": \"103\",\"Message\": \"SME don't exists!\"";
+          callback(resp.resp_code, resp.resp_header, resp.resp_body, null, log_msg);
           return false;
         }
         //EEXIST: OK to proceed
@@ -533,7 +553,9 @@ FS_blob.prototype.file_create = function (container_name,filename,create_options
   // by jesse , add sme quota limmit
   if ( check_container_quota(container_name,fb) === false )  {
 	error_msg(500,"UsageExceeded","Usage will exceed the SME quota",resp);
-    callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+	// by jesse , add syslog
+	var log_msg = "\"Code\": \"301\",\"Message\": \"SME space will exceed the quota!\"";
+    callback(resp.resp_code, resp.resp_header, resp.resp_body, null, log_msg);
     return;
   }
   //QUOTA
@@ -557,7 +579,9 @@ FS_blob.prototype.file_create = function (container_name,filename,create_options
   } catch (err1) {
     if (resp !== null) {
       error_msg(500,"InternalError",err1,resp);
-      callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+	  // by jesse , add syslog
+	  var log_msg = "\"Code\": \"302\",\"Message\": \"Upload file[" + filename + "] to SME Space fail\"";
+      callback(resp.resp_code, resp.resp_header, resp.resp_body, null, log_msg);
     }
     fs.unlink(temp_path,function(err) {});
     return;
@@ -577,7 +601,9 @@ FS_blob.prototype.file_create = function (container_name,filename,create_options
     fb.logger.error( ("write stream " + blob_path+" "+err));
     if (resp !== null) {
       error_msg(500,"InternalError",err,resp);
-      callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+	  // by jesse , add syslog
+	  var log_msg = "\"Code\": \"302\",\"Message\": \"Upload file[" + filename + "] to SME Space fail\"";
+      callback(resp.resp_code, resp.resp_header, resp.resp_body, null, log_msg);
     }
     if (data) data.destroy();
     if (stream && !stream.destroyed) { stream.destroyed = true;  stream.destroy(); }
@@ -590,7 +616,8 @@ FS_blob.prototype.file_create = function (container_name,filename,create_options
     upload_failed = true;
     if (resp !== null) {
       error_msg(500,"InternalError",err,resp);
-      callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+	  var log_msg = "\"Code\": \"302\",\"Message\": \"Upload file[" + filename + "] to SME Space fail\"";
+      callback(resp.resp_code, resp.resp_header, resp.resp_body, null, log_msg);
     }
     fb.logger.error( ('input stream '+blob_path+" "+err));
     if (data) data.destroy();
@@ -645,7 +672,8 @@ FS_blob.prototype.file_create = function (container_name,filename,create_options
     if (upload_failed) {
       if (resp !== null) {
         error_msg(500,"InternalError","upload failed",resp);
-        callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+		var log_msg = "\"Code\": \"302\",\"Message\": \"Upload file[" + filename + "] to SME Space fail\"";
+        callback(resp.resp_code, resp.resp_header, resp.resp_body, null, log_msg);
       }
       fs.unlink(blob_path, function(err) {});
       fs.unlink(temp_path, function(err) {});
@@ -661,7 +689,9 @@ FS_blob.prototype.file_create = function (container_name,filename,create_options
       if (error) {
           fb.logger.error(blob_path+' md5 calculation error: '+error);
           error_msg(500,"InternalError","Error in md5 calculation:"+error,resp);
-          callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+		  // by jesse , add syslog
+		  var log_msg = "\"Code\": \"103\",\"Message\": \"SME don't exists!\"";
+          callback(resp.resp_code, resp.resp_header, resp.resp_body, null,log_msg);
           data.destroy();
           remove_uploaded_file(blob_path);
           return;
@@ -707,6 +737,8 @@ FS_blob.prototype.file_create_meta = function (container_name, filename, temp_pa
       fb.logger.error( ("In creating file "+filename+" meta in container_name "+container_name+" "+err));
       if (resp !== null) {
         error_msg(404,"NoSuchBucket",err,resp);
+		// by jesse ,add syslog
+		var log_msg = "\"Code\": \"103\",\"Message\": \"SME don't exists!\"";
         callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
       }
       fs.unlink(temp_path,function(err) {});
@@ -730,7 +762,9 @@ FS_blob.prototype.file_create_meta = function (container_name, filename, temp_pa
         fb.logger.error( ("In creating file "+filename+" meta in container_name "+container_name+" "+err));
         if (resp !== null) {
           error_msg(500,"InternalError",err,resp);
-          callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+		  // by jesse ,add syslog
+		  var log_msg = "\"Code\": \"302\",\"Message\": \"Upload file[" + filename + "] to SME Space fail\"";
+          callback(resp.resp_code, resp.resp_header, resp.resp_body, null,log_msg);
         }
         fs.unlink(temp_path,function(err) {});
         fs.unlink(fb.root_path+"/"+container_name+"/"+doc.vblob_file_path,function(err){});
@@ -747,7 +781,8 @@ FS_blob.prototype.file_create_meta = function (container_name, filename, temp_pa
           fb.logger.error( ("In creating file "+filename+" meta in container_name "+container_name+" "+err));
           if (resp !== null) {
             error_msg(500,"InternalError",err,resp);
-            callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+			var log_msg = "\"Code\": \"302\",\"Message\": \"Upload file[" + filename + "] to SME Space fail\"";
+            callback(resp.resp_code, resp.resp_header, resp.resp_body, null, log_msg);
           }
           return;
         }
@@ -758,7 +793,9 @@ FS_blob.prototype.file_create_meta = function (container_name, filename, temp_pa
             fs.unlink(temp_path,function(err) {});
     //step 8 respond
             fb.logger.debug("file creation "+doc.vblob_file_version+" complete, now reply back...");
-            callback(resp.resp_code, resp.resp_header, resp.resp_body,null);
+			// by jesse ,add syslog
+			var log_msg = "\"Code\": \"0\",\"Message\": \"Upload file[" + filename +"] success\"";
+            callback(resp.resp_code, resp.resp_header, resp.resp_body,null,log_msg);
           }
         );
       });
@@ -783,7 +820,9 @@ FS_blob.prototype.file_delete_meta = function (container_name, filename, callbac
     if (err) {
       var resp = {};
       error_msg(500,"InternalError",err,resp);
-      callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+	  // by jesse ,add syslog
+	  var log_msg = "\"Code\": \"401\",\"Message\": \"Delete file[" + filename + "] fail\"";
+      callback(resp.resp_code, resp.resp_header, resp.resp_body, null,log_msg);
       return;
     }
     //add to gc cache
@@ -795,7 +834,9 @@ FS_blob.prototype.file_delete_meta = function (container_name, filename, callbac
       resp_code = 204;
       var header = common_header();
       resp_header = header;
-      callback(resp_code, resp_header, null, null);
+	  //
+	  var log_msg = "\"Code\": \"0\",\"Message\": \"Delete file[" + filename + "] success\"";
+      callback(resp_code, resp_header, null, null,log_msg);
     });
   });
 };
@@ -991,7 +1032,11 @@ FS_blob.prototype.file_read = function (container_name, filename, options, callb
         setTimeout(function(fb1) { fb1.file_read(container_name, filename, options, callback,fb1, retry_cnt+1); }, Math.floor(Math.random()*1000) + 100,fb);
         return;
       }
-      error_msg(404,"NoSuchFile",err,resp); callback(resp.resp_code, resp.resp_header, resp.resp_body, null); return;
+      error_msg(404,"NoSuchFile",err,resp); 
+	  // by jesse , add syslog
+	  var log_msg = "\"Code\": \"501\",\"Message\": \"Read file[" + filename + "] from SME Space fail\"";
+	  callback(resp.resp_code, resp.resp_header, resp.resp_body, null,log_msg); 
+	  return;
     }
     var obj = JSON.parse(data);
     var header = common_header();
@@ -1117,6 +1162,7 @@ function query_files(container_name, options, callback, fb)
   }
   var idx = 0;
   var low = 0, high = keys.length-1, mid;
+  
   if (options.marker || options.prefix) {
     var st = options.marker;
     if (!st || st < options.prefix) st = options.prefix;
@@ -1210,7 +1256,9 @@ FS_blob.prototype.file_list = function(container_name, options, callback, fb)
     } catch (e) {
       var resp = {};
       error_msg(500,'InternalError',e,resp);
-      callback(resp.resp_code, resp.resp_header, resp.resp_body, null);
+	  // by jesse ,add syslog
+	  var log_msg = "\"Code\": \"601\",\"Message\": \"Query SME file list fail\"";
+      callback(resp.resp_code, resp.resp_header, resp.resp_body, null, log_msg);
     }
   } else query_files(container_name, options,callback,fb);
 }
@@ -1251,6 +1299,7 @@ function render_containers(dirs,callback,fb)
 
 //=======================================================
 //this is interface file for abstraction
+//Constructor
 var FS_Driver = function(option,callback) {
   var this1 = this;
   this1.root_path = option.root;
