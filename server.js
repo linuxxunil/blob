@@ -154,7 +154,8 @@ function syslog(req,msg) {
 					+  "\"DstIP\": \""	+ req.host() + "\","
 					+  "\"SmeID\": \""	+ req.params.container + "\","
 					+  msg				+ "}";
-		Syslog.log(Syslog.LOG_INFO, log_msg);
+				
+		Syslog.info(log_msg);
 	} else {
 		// nothing
 	}

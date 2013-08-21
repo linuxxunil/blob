@@ -1004,7 +1004,6 @@ FS_blob.prototype.file_read = function (container_name, filename, options, callb
   var resp_code, resp_header, resp_body;
   resp_code = resp_header = resp_body = null;
   var c_path = this.root_path + "/" + container_name;
-  console.log(c_path);
   if (container_exists(container_name,callback,this) === false) return;
 //step2.1 calc unique hash for key
   var key_fingerprint = get_key_fingerprint(filename);
