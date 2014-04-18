@@ -1,0 +1,12 @@
+/*
+0 - Success
+101 - SME exists
+102 - SME create failure
+103 - SME don't exists
+201 - SME delete failure (space is not empty!)
+301 - SME space will exceed the quota
+302 - Upload file[" + filename + "] to SME Space fail
+401 - Delete file[" + filename + "] fail
+501 - Read file[" + filename + "] from SME Space fail
+601 - Query SME file list fail
+*/
